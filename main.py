@@ -1,4 +1,4 @@
-import asyncio, time, os
+import asyncio, time
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse
 from aiogram import Bot, Dispatcher, types, F
@@ -12,7 +12,6 @@ dp = Dispatcher()
 
 commands_storage = {}
 pc_stats = {}
-console_logs = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,15 +21,6 @@ async def lifespan(app: FastAPI):
     polling_task.cancel()
 
 app = FastAPI(lifespan=lifespan)
-
-# Прием плагинов (.jar)
-@dp.message(F.document)
-async def handle_docs(m: Message):
-    if m.document.file_name.endswith('.jar'):
-        f = await bot.get_file(m.document.file_id)
-        url = f"https://api.telegram.org/file/bot{API_TOKEN}/{f.file_path}"
-        commands_storage[str(m.from_user.id)] = f"INSTALL_PLG:{url}|{m.document.file_name}"
-        await m.answer(f"🚀 Плагин {m.document.file_name} отправлен на установку!")
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -42,82 +32,97 @@ async def index():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            :root { --grad: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%); }
-            body { background: #08080a; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 15px; }
-            .card { background: #121216; border-radius: 20px; padding: 20px; border: 1px solid #222; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+            body { background: #0a0a0c; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 15px; overflow-x: hidden; }
+            .card { background: #121216; border-radius: 20px; padding: 15px; border: 1px solid #222; }
             
+            #console-wrapper { position: relative; transition: 0.3s; }
             #console { 
-                background: #000; border: 1px solid #333; border-radius: 12px; height: 180px; 
-                overflow-y: auto; padding: 10px; font-family: 'Consolas', monospace; font-size: 11px; 
-                color: #00ff41; margin: 15px 0; white-space: pre-wrap;
+                background: #000; border: 2px solid #00ff41; border-radius: 10px; 
+                height: 200px; overflow-y: auto; padding: 10px; 
+                font-family: 'Consolas', monospace; font-size: 12px; color: #00ff41; 
+                margin: 10px 0; white-space: pre-wrap;
             }
+            #console.fullscreen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 100; margin: 0; border-radius: 0; }
             
-            .btn { 
-                width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; 
-                font-weight: bold; cursor: pointer; margin: 5px 0; transition: 0.2s;
-            }
-            .btn-main { background: var(--grad); color: #000; }
-            .btn-danger { background: linear-gradient(135deg, #ff416c, #ff4b2b); }
+            .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: bold; margin: 5px 0; }
+            .btn-start { background: linear-gradient(135deg, #00b09b, #96c93d); }
+            .btn-stop { background: linear-gradient(135deg, #ff416c, #ff4b2b); }
+            .btn-full { background: #333; font-size: 10px; width: auto; padding: 5px 10px; position: absolute; right: 5px; top: 15px; }
             
-            .input-group { display: flex; gap: 8px; margin-top: 10px; }
-            input { flex: 1; background: #1a1a1e; border: 1px solid #333; border-radius: 10px; color: white; padding: 12px; }
-            .stat-val { color: #00f2fe; font-size: 18px; font-weight: bold; }
+            .status-tag { padding: 4px 8px; border-radius: 6px; font-size: 11px; margin-right: 5px; }
+            .on { background: rgba(0, 255, 65, 0.2); color: #00ff41; }
+            .off { background: rgba(255, 0, 0, 0.2); color: #ff4d4d; }
         </style>
     </head>
     <body>
         <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span id="st-text" style="color:red; font-weight:bold;">● OFFLINE</span>
-                <div style="text-align: right;">
-                    <span class="stat-val" id="cpu">0%</span> <small>CPU</small>
-                </div>
+            <div style="margin-bottom: 10px;">
+                <span id="st-bat" class="status-tag off">BAT: OFF</span>
+                <span id="st-play" class="status-tag off">PLAYIT: OFF</span>
             </div>
 
-            <div id="console">Ожидание логов...</div>
-
-            <div class="input-group">
-                <input type="text" id="term-in" placeholder="Введите команду...">
-                <button class="btn btn-main" style="width: 80px; margin:0;" onclick="sendTerm()">SEND</button>
+            <div id="console-wrapper">
+                <button class="btn btn-full" onclick="toggleFull()">FULLSCREEN</button>
+                <div id="console">Загрузка логов...</div>
             </div>
 
-            <div style="margin-top: 20px;">
-                <button class="btn btn-main" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ СЕРВЕР</button>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <button class="btn btn-danger" onclick="sendCmd('STOP')">🛑 СТОП</button>
-                    <button class="btn" style="background:#333;" onclick="sendCmd('SCREENSHOT')">📸 СКРИН</button>
-                </div>
-                <button class="btn" style="background: #fbab7e; background-image: linear-gradient(62deg, #fbab7e 0%, #f7ce68 100%); color:black;" 
-                        onclick="sendCmd('CLEAN')">🧹 ОЧИСТИТЬ ПАМЯТЬ (TASKKILL)</button>
+            <div style="display: flex; gap: 5px;">
+                <input type="text" id="t-in" style="flex:1; background:#000; color:#00ff41; border:1px solid #333; padding:10px; border-radius:10px;">
+                <button onclick="sendTerm()" style="background:#00ff41; color:#000; border:none; border-radius:10px; padding:0 15px;">></button>
             </div>
+
+            <button class="btn btn-start" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ</button>
+            <button class="btn btn-stop" onclick="sendCmd('STOP')">🛑 СТОП</button>
         </div>
+
+        <audio id="notifSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"></audio>
 
         <script>
             let tg = window.Telegram.WebApp;
             const uid = tg.initDataUnsafe.user.id;
+            let isFull = false;
+            let userScrolling = false;
+            let lastBatState = false;
+
+            const con = document.getElementById('console');
+            con.onscroll = () => {
+                userScrolling = con.scrollTop + con.clientHeight < con.scrollHeight - 20;
+            };
 
             async function refresh() {
-                try {
-                    let r = await fetch('/get_pc_stats/' + uid);
-                    let d = await r.json();
-                    document.getElementById('st-text').innerText = d.online ? "● ONLINE" : "● OFFLINE";
-                    document.getElementById('st-text').style.color = d.online ? "#00ff41" : "red";
-                    document.getElementById('cpu').innerText = d.cpu + "%";
-                    
-                    if(d.logs) {
-                        const c = document.getElementById('console');
-                        c.innerText = d.logs.join('\\n');
-                        c.scrollTop = c.scrollHeight;
-                    }
-                } catch(e) {}
+                let r = await fetch('/get_pc_stats/' + uid);
+                let d = await r.json();
+                
+                // Звук при запуске
+                if (d.bat_on && !lastBatState) {
+                    document.getElementById('notifSound').play();
+                    tg.HapticFeedback.notificationOccurred('success');
+                }
+                lastBatState = d.bat_on;
+
+                document.getElementById('st-bat').className = d.bat_on ? 'status-tag on' : 'status-tag off';
+                document.getElementById('st-bat').innerText = 'BAT: ' + (d.bat_on ? 'ON' : 'OFF');
+                document.getElementById('st-play').className = d.play_on ? 'status-tag on' : 'status-tag off';
+                document.getElementById('st-play').innerText = 'PLAYIT: ' + (d.play_on ? 'ON' : 'OFF');
+
+                if (d.logs) {
+                    con.innerText = d.logs.join('\\n');
+                    if (!userScrolling) con.scrollTop = con.scrollHeight;
+                }
+            }
+
+            function toggleFull() {
+                isFull = !isFull;
+                con.classList.toggle('fullscreen');
             }
 
             function sendCmd(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); }
             function sendTerm() {
-                const i = document.getElementById('term-in');
+                const i = document.getElementById('t-in');
                 fetch(`/send_from_web?user_id=${uid}&cmd=TERM:` + i.value);
                 i.value = '';
             }
-            setInterval(refresh, 2000);
+            setInterval(refresh, 1000);
         </script>
     </body>
     </html>
@@ -125,14 +130,18 @@ async def index():
 
 @app.get("/get_pc_stats/{user_id}")
 async def get_stats(user_id: str):
-    stats = pc_stats.get(user_id, {"last_seen": 0})
-    is_online = (time.time() - stats['last_seen']) < 10
-    return {"online": is_online, "cpu": stats.get("cpu", 0), "logs": console_logs.get(user_id, [])}
+    s = pc_stats.get(user_id, {"last_seen": 0})
+    return {
+        "online": (time.time() - s['last_seen']) < 10,
+        "bat_on": s.get("bat_on", False),
+        "play_on": s.get("play_on", False),
+        "logs": s.get("logs", [])
+    }
 
 @app.post("/report_status/{user_id}")
 async def report_status(user_id: str, data: dict):
-    pc_stats[user_id] = {"cpu": data.get("cpu", 0), "last_seen": time.time()}
-    if "logs" in data: console_logs[user_id] = data["logs"]
+    pc_stats[user_id] = data
+    pc_stats[user_id]['last_seen'] = time.time()
     return {"ok": True}
 
 @app.get("/get_cmd/{user_id}")
@@ -145,16 +154,5 @@ async def get_cmd(user_id: str):
 async def send_from_web(user_id: str, cmd: str):
     commands_storage[user_id] = cmd
     return {"ok": True}
-
-@app.post("/upload_screen/{user_id}")
-async def upload_screen(user_id: str, file: UploadFile = File(...)):
-    await bot.send_photo(chat_id=int(user_id), photo=BufferedInputFile(await file.read(), filename="s.png"))
-    return {"ok": True}
-
-@dp.message(F.text == "/start")
-async def start(m: Message):
-    await m.answer("Панель готова.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎮 КОНСОЛЬ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))
-    ]]))
 
 if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=10000)

@@ -29,114 +29,93 @@ async def index():
     <html>
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            body { background: #0a0a0c; color: white; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 15px; overflow-x: hidden; }
-            .card { background: #121216; border-radius: 20px; padding: 15px; border: 1px solid #222; }
+            body { background: #0a0a0c; color: white; font-family: sans-serif; margin: 0; padding: 15px; }
+            .card { background: #121216; border-radius: 20px; padding: 20px; border: 1px solid #333; }
+            .status-row { display: flex; gap: 10px; margin-bottom: 15px; }
+            .tag { padding: 5px 10px; border-radius: 8px; font-size: 10px; font-weight: bold; border: 1px solid #444; }
+            .on { color: #00ff41; border-color: #00ff41; background: rgba(0,255,65,0.1); }
+            .off { color: #ff416c; border-color: #ff416c; background: rgba(255,65,108,0.1); }
             
-            #console-wrapper { position: relative; transition: 0.3s; }
-            #console { 
-                background: #000; border: 2px solid #00ff41; border-radius: 10px; 
-                height: 200px; overflow-y: auto; padding: 10px; 
-                font-family: 'Consolas', monospace; font-size: 12px; color: #00ff41; 
-                margin: 10px 0; white-space: pre-wrap;
-            }
-            #console.fullscreen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 100; margin: 0; border-radius: 0; }
+            #console-box { position: relative; background: #000; border: 1px solid #00ff41; border-radius: 10px; margin: 15px 0; }
+            #console { height: 250px; overflow-y: auto; padding: 10px; font-family: monospace; color: #00ff41; font-size: 12px; white-space: pre-wrap; }
+            .fullscreen { position: fixed !important; top:0; left:0; width:100vw; height:100vh !important; z-index:999; border-radius:0 !important; }
             
-            .btn { width: 100%; padding: 14px; border-radius: 12px; border: none; color: white; font-weight: bold; margin: 5px 0; }
+            .btn { width: 100%; padding: 15px; border-radius: 12px; border: none; font-weight: bold; color: white; margin-top: 10px; }
             .btn-start { background: linear-gradient(135deg, #00b09b, #96c93d); }
             .btn-stop { background: linear-gradient(135deg, #ff416c, #ff4b2b); }
-            .btn-full { background: #333; font-size: 10px; width: auto; padding: 5px 10px; position: absolute; right: 5px; top: 15px; }
+            .fs-btn { position: absolute; top: 5px; right: 5px; background: #222; font-size: 10px; color: white; border: 1px solid #444; padding: 3px 7px; border-radius: 5px; }
             
-            .status-tag { padding: 4px 8px; border-radius: 6px; font-size: 11px; margin-right: 5px; }
-            .on { background: rgba(0, 255, 65, 0.2); color: #00ff41; }
-            .off { background: rgba(255, 0, 0, 0.2); color: #ff4d4d; }
-        </style>
+            input { width: 100%; background: #000; border: 1px solid #333; color: #00ff41; padding: 12px; border-radius: 10px; box-sizing: border-box; }
+        </audio>
     </head>
     <body>
+        <audio id="snd" src="https://www.myinstants.com/media/sounds/discord-notification.mp3"></audio>
         <div class="card">
-            <div style="margin-bottom: 10px;">
-                <span id="st-bat" class="status-tag off">BAT: OFF</span>
-                <span id="st-play" class="status-tag off">PLAYIT: OFF</span>
+            <div class="status-row">
+                <div id="bat-tag" class="tag off">BAT: OFF</div>
+                <div id="play-tag" class="tag off">PLAYIT: OFF</div>
+            </div>
+            
+            <div id="console-box">
+                <button class="fs-btn" onclick="document.getElementById('console-box').classList.toggle('fullscreen')">FULL</button>
+                <div id="console">Ожидание...</div>
             </div>
 
-            <div id="console-wrapper">
-                <button class="btn btn-full" onclick="toggleFull()">FULLSCREEN</button>
-                <div id="console">Загрузка логов...</div>
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="cmd-in" placeholder="Команда...">
+                <button onclick="sendT()" style="background:#00ff41; border:none; border-radius:10px; padding:0 15px;">></button>
             </div>
 
-            <div style="display: flex; gap: 5px;">
-                <input type="text" id="t-in" style="flex:1; background:#000; color:#00ff41; border:1px solid #333; padding:10px; border-radius:10px;">
-                <button onclick="sendTerm()" style="background:#00ff41; color:#000; border:none; border-radius:10px; padding:0 15px;">></button>
-            </div>
-
-            <button class="btn btn-start" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ</button>
-            <button class="btn btn-stop" onclick="sendCmd('STOP')">🛑 СТОП</button>
+            <button class="btn btn-start" onclick="sendC('START')">🚀 ЗАПУСТИТЬ</button>
+            <button class="btn btn-stop" onclick="sendC('STOP')">🛑 СТОП</button>
         </div>
-
-        <audio id="notifSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"></audio>
 
         <script>
             let tg = window.Telegram.WebApp;
             const uid = tg.initDataUnsafe.user.id;
-            let isFull = false;
-            let userScrolling = false;
-            let lastBatState = false;
+            let lastBat = false;
+            let userScroll = false;
 
             const con = document.getElementById('console');
-            con.onscroll = () => {
-                userScrolling = con.scrollTop + con.clientHeight < con.scrollHeight - 20;
-            };
+            con.onscroll = () => { userScroll = con.scrollTop + con.clientHeight < con.scrollHeight - 20; };
 
-            async function refresh() {
+            async function update() {
                 let r = await fetch('/get_pc_stats/' + uid);
                 let d = await r.json();
-                
-                // Звук при запуске
-                if (d.bat_on && !lastBatState) {
-                    document.getElementById('notifSound').play();
-                    tg.HapticFeedback.notificationOccurred('success');
-                }
-                lastBatState = d.bat_on;
 
-                document.getElementById('st-bat').className = d.bat_on ? 'status-tag on' : 'status-tag off';
-                document.getElementById('st-bat').innerText = 'BAT: ' + (d.bat_on ? 'ON' : 'OFF');
-                document.getElementById('st-play').className = d.play_on ? 'status-tag on' : 'status-tag off';
-                document.getElementById('st-play').innerText = 'PLAYIT: ' + (d.play_on ? 'ON' : 'OFF');
+                if(d.bat_on && !lastBat) { document.getElementById('snd').play(); tg.HapticFeedback.notificationOccurred('success'); }
+                lastBat = d.bat_on;
 
-                if (d.logs) {
+                document.getElementById('bat-tag').className = d.bat_on ? 'tag on' : 'tag off';
+                document.getElementById('bat-tag').innerText = 'BAT: ' + (d.bat_on ? 'ON' : 'OFF');
+                document.getElementById('play-tag').className = d.play_on ? 'tag on' : 'tag off';
+                document.getElementById('play-tag').innerText = 'PLAYIT: ' + (d.play_on ? 'ON' : 'OFF');
+
+                if(d.logs) {
                     con.innerText = d.logs.join('\\n');
-                    if (!userScrolling) con.scrollTop = con.scrollHeight;
+                    if(!userScroll) con.scrollTop = con.scrollHeight;
                 }
             }
-
-            function toggleFull() {
-                isFull = !isFull;
-                con.classList.toggle('fullscreen');
+            function sendC(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); }
+            function sendT() { 
+                const i = document.getElementById('cmd-in');
+                fetch(`/send_from_web?user_id=${uid}&cmd=TERM:`+i.value); 
+                i.value=''; 
             }
-
-            function sendCmd(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); }
-            function sendTerm() {
-                const i = document.getElementById('t-in');
-                fetch(`/send_from_web?user_id=${uid}&cmd=TERM:` + i.value);
-                i.value = '';
-            }
-            setInterval(refresh, 1000);
+            setInterval(update, 1000);
         </script>
     </body>
     </html>
     """
-
+# ... (Остальной код API без изменений: get_pc_stats, report_status, get_cmd, send_from_web)
+# Добавь эти функции ниже:
 @app.get("/get_pc_stats/{user_id}")
 async def get_stats(user_id: str):
     s = pc_stats.get(user_id, {"last_seen": 0})
-    return {
-        "online": (time.time() - s['last_seen']) < 10,
-        "bat_on": s.get("bat_on", False),
-        "play_on": s.get("play_on", False),
-        "logs": s.get("logs", [])
-    }
+    return {"bat_on": s.get("bat_on", False), "play_on": s.get("play_on", False), "logs": s.get("logs", [])}
 
 @app.post("/report_status/{user_id}")
 async def report_status(user_id: str, data: dict):
@@ -154,5 +133,10 @@ async def get_cmd(user_id: str):
 async def send_from_web(user_id: str, cmd: str):
     commands_storage[user_id] = cmd
     return {"ok": True}
+
+@dp.message(F.text == "/start")
+async def start(m: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎮 КОНСОЛЬ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))]])
+    await m.answer("Панель управления готова.", reply_markup=kb)
 
 if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=10000)

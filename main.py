@@ -1,4 +1,4 @@
-import asyncio, time, os
+import asyncio, time
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse
 from aiogram import Bot, Dispatcher, types, F
@@ -6,26 +6,19 @@ from aiogram.types import Message, WebAppInfo, InlineKeyboardMarkup, InlineKeybo
 import uvicorn
 from contextlib import asynccontextmanager
 
-# --- НАСТРОЙКИ ---
 API_TOKEN = '8504711791:AAG6jdtS_iC0ujhrFBwkPyshqFDqpi6JAdY'
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 commands_storage = {}
 pc_stats = {}
-console_logs = {}
 
-# Используем современный Lifespan вместо on_event
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: запуск бота
     await bot.delete_webhook(drop_pending_updates=True)
     polling_task = asyncio.create_task(dp.start_polling(bot))
-    print("Бот запущен!")
     yield
-    # Shutdown: остановка
     polling_task.cancel()
-    await bot.session.close()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -33,87 +26,91 @@ app = FastAPI(lifespan=lifespan)
 async def index():
     return """
     <!DOCTYPE html>
-    <html lang="ru">
+    <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
-            :root { --primary: #00f2fe; --bg: #0f0f13; }
-            body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; padding: 15px; text-align: center; }
-            .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 20px; }
-            #console { 
-                background: #000; border-radius: 10px; height: 180px; overflow-y: auto; 
-                padding: 10px; font-size: 11px; color: #0f0; text-align: left;
-                border: 1px solid #333; margin: 15px 0; font-family: monospace;
+            body { 
+                background: #0a0a0c; color: white; font-family: 'Segoe UI', sans-serif; 
+                display: flex; flex-direction: column; align-items: center; margin: 0; padding: 20px;
             }
-            .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
-            .stat-item { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; }
-            .btn { 
-                width: 100%; padding: 15px; margin: 5px 0; border: none; border-radius: 12px; 
-                font-weight: bold; font-size: 14px; cursor: pointer; transition: 0.2s;
+            .container { width: 100%; max-width: 400px; }
+            .card {
+                background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 25px; padding: 25px; backdrop-filter: blur(15px);
+                box-shadow: 0 20px 50px rgba(0,0,0,0.5);
             }
-            .btn-main { background: var(--primary); color: black; }
-            .btn-danger { background: #ff4d4d; color: white; }
-            .btn:disabled { opacity: 0.3; }
-            input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #333; background: #1a1a1a; color: white; box-sizing: border-box; }
+            .status-line { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font-weight: bold; }
+            .dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 10px currentColor; }
+            
+            .btn {
+                width: 100%; padding: 16px; margin: 10px 0; border: none; border-radius: 15px;
+                font-size: 16px; font-weight: bold; color: white; cursor: pointer;
+                transition: transform 0.2s, box-shadow 0.2s;
+                display: flex; align-items: center; justify-content: center; gap: 10px;
+            }
+            .btn:active { transform: scale(0.97); }
+            
+            .btn-start { background: linear-gradient(135deg, #00b09b, #96c93d); box-shadow: 0 4px 15px rgba(0, 176, 155, 0.3); }
+            .btn-stop { background: linear-gradient(135deg, #ff416c, #ff4b2b); box-shadow: 0 4px 15px rgba(255, 65, 108, 0.3); }
+            .btn-screen { background: linear-gradient(135deg, #4facfe, #00f2fe); box-shadow: 0 4px 15px rgba(79, 172, 254, 0.3); }
+            
+            .btn:disabled { background: #333 !important; box-shadow: none !important; opacity: 0.5; }
+            
+            .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+            .stat-box { background: rgba(0,0,0,0.3); padding: 12px; border-radius: 12px; text-align: center; }
+            .stat-val { color: #00f2fe; font-weight: bold; font-size: 18px; }
         </style>
     </head>
     <body>
-        <div class="card">
-            <div id="status" style="color: #ff4d4d; font-weight: bold; margin-bottom: 10px;">● PC OFFLINE</div>
-            
-            <div class="stat-grid">
-                <div class="stat-item"><small>CPU</small><br><b id="cpu">0%</b></div>
-                <div class="stat-item"><small>RAM</small><br><b id="ram">0%</b></div>
-            </div>
+        <div class="container">
+            <div class="card">
+                <div class="status-line" id="st-line" style="color: #ff4d4d;">
+                    <div class="dot" id="st-dot"></div> <span id="st-text">OFFLINE</span>
+                </div>
+                
+                <div class="stat-grid">
+                    <div class="stat-box"><div class="stat-val" id="cpu">0%</div><div style="font-size:10px">CPU</div></div>
+                    <div class="stat-box"><div class="stat-val" id="ram">0%</div><div style="font-size:10px">RAM</div></div>
+                </div>
 
-            <div id="console">Консоль ожидает подключения...</div>
-            
-            <input type="text" id="cmd-in" placeholder="Введите команду в консоль...">
-            <button class="btn btn-main" style="margin-top:10px;" onclick="sendTerm()">ОТПРАВИТЬ КОМАНДУ</button>
-            
-            <hr style="opacity: 0.1; margin: 20px 0;">
-            
-            <button id="b-start" class="btn btn-main" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ СЕРВЕР</button>
-            <button id="b-stop" class="btn btn-danger" onclick="sendCmd('STOP')">🛑 ОСТАНОВИТЬ</button>
-            <button id="b-screen" class="btn" style="background:#333; color:white;" onclick="sendCmd('SCREENSHOT')">📸 СКРИНШОТ</button>
+                <div style="margin-top: 25px;">
+                    <button id="b1" class="btn btn-start" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ</button>
+                    <button id="b2" class="btn btn-stop" onclick="sendCmd('STOP')">🛑 ВЫКЛЮЧИТЬ</button>
+                    <button id="b3" class="btn btn-screen" onclick="sendCmd('SCREENSHOT')">📸 СКРИНШОТ</button>
+                </div>
+            </div>
         </div>
 
         <script>
             let tg = window.Telegram.WebApp;
-            tg.expand();
             const uid = tg.initDataUnsafe.user.id;
 
-            async function refresh() {
+            async function update() {
                 try {
                     let r = await fetch('/get_pc_stats/' + uid);
                     let d = await r.json();
                     
-                    document.getElementById('status').innerText = d.online ? "● PC ONLINE" : "● PC OFFLINE";
-                    document.getElementById('status').style.color = d.online ? "#28a745" : "#ff4d4d";
+                    const line = document.getElementById('st-line');
+                    const text = document.getElementById('st-text');
+                    const btns = [document.getElementById('b1'), document.getElementById('b2'), document.getElementById('b3')];
+
+                    if(d.online) {
+                        line.style.color = "#28a745"; text.innerText = "ONLINE";
+                        btns.forEach(b => b.disabled = false);
+                    } else {
+                        line.style.color = "#ff4d4d"; text.innerText = "OFFLINE";
+                        btns.forEach(b => b.disabled = true);
+                    }
                     document.getElementById('cpu').innerText = d.cpu + "%";
                     document.getElementById('ram').innerText = d.ram + "%";
-                    
-                    if(d.logs.length > 0) {
-                        document.getElementById('console').innerText = d.logs.join('\\n');
-                        let c = document.getElementById('console');
-                        c.scrollTop = c.scrollHeight;
-                    }
-
-                    const btns = [document.getElementById('b-start'), document.getElementById('b-stop'), document.getElementById('b-screen')];
-                    btns.forEach(b => b.disabled = !d.online);
                 } catch(e) {}
             }
 
-            function sendCmd(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); tg.HapticFeedback.impactOccurred('medium'); }
-            function sendTerm() {
-                let i = document.getElementById('cmd-in');
-                fetch(`/send_from_web?user_id=${uid}&cmd=TERMINAL:${i.value}`);
-                i.value = '';
-            }
-
-            setInterval(refresh, 2000);
+            function sendCmd(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); tg.HapticFeedback.notificationOccurred('success'); }
+            setInterval(update, 2000);
         </script>
     </body>
     </html>
@@ -123,22 +120,11 @@ async def index():
 async def get_stats(user_id: str):
     stats = pc_stats.get(user_id, {"last_seen": 0})
     is_online = (time.time() - stats['last_seen']) < 10
-    return {
-        "online": is_online,
-        "cpu": stats.get("cpu", 0),
-        "ram": stats.get("ram", 0),
-        "logs": console_logs.get(user_id, ["Ожидание данных..."])
-    }
+    return {"online": is_online, "cpu": stats.get("cpu", 0), "ram": stats.get("ram", 0)}
 
 @app.post("/report_status/{user_id}")
 async def report_status(user_id: str, data: dict):
-    pc_stats[user_id] = {
-        "cpu": data.get("cpu", 0),
-        "ram": data.get("ram", 0),
-        "last_seen": time.time()
-    }
-    if "logs" in data:
-        console_logs[user_id] = data["logs"]
+    pc_stats[user_id] = {"cpu": data.get("cpu", 0), "ram": data.get("ram", 0), "last_seen": time.time()}
     return {"ok": True}
 
 @app.get("/send_from_web")
@@ -148,7 +134,6 @@ async def send_from_web(user_id: str, cmd: str):
 
 @app.get("/get_cmd/{user_id}")
 async def get_cmd(user_id: str):
-    if user_id in pc_stats: pc_stats[user_id]["last_seen"] = time.time()
     cmd = commands_storage.get(user_id, "IDLE")
     commands_storage[user_id] = "IDLE"
     return {"cmd": cmd}
@@ -161,10 +146,8 @@ async def upload_screen(user_id: str, file: UploadFile = File(...)):
 
 @dp.message(F.text == "/start")
 async def start(m: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎮 ОТКРЫТЬ КОНСОЛЬ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))
-    ]])
-    await m.answer("Панель управления готова:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎮 КОНТРОЛЬ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))]])
+    await m.answer("Панель управления активирована.", reply_markup=kb)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)

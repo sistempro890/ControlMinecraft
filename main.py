@@ -4,15 +4,30 @@ from fastapi.responses import HTMLResponse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import Message, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 import uvicorn
+from contextlib import asynccontextmanager
 
+# --- НАСТРОЙКИ ---
 API_TOKEN = '8504711791:AAG6jdtS_iC0ujhrFBwkPyshqFDqpi6JAdY'
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-app = FastAPI()
 
 commands_storage = {}
 pc_stats = {}
-console_logs = {} # Храним последние 20 строк консоли для каждого юзера
+console_logs = {}
+
+# Используем современный Lifespan вместо on_event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: запуск бота
+    await bot.delete_webhook(drop_pending_updates=True)
+    polling_task = asyncio.create_task(dp.start_polling(bot))
+    print("Бот запущен!")
+    yield
+    # Shutdown: остановка
+    polling_task.cancel()
+    await bot.session.close()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -25,70 +40,75 @@ async def index():
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <style>
             :root { --primary: #00f2fe; --bg: #0f0f13; }
-            body { background: var(--bg); color: white; font-family: 'Consolas', sans-serif; margin: 0; padding: 15px; }
-            .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 15px; }
-            .badge { display: inline-block; padding: 5px 10px; border-radius: 8px; font-size: 10px; margin-bottom: 10px; font-weight: bold; }
-            .online { background: #28a745; } .offline { background: #dc3545; }
-            
+            body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; padding: 15px; text-align: center; }
+            .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 20px; }
             #console { 
-                background: #000; border-radius: 10px; height: 200px; overflow-y: auto; 
-                padding: 10px; font-size: 11px; color: #0f0; border: 1px solid #333; margin: 10px 0;
-                white-space: pre-wrap;
+                background: #000; border-radius: 10px; height: 180px; overflow-y: auto; 
+                padding: 10px; font-size: 11px; color: #0f0; text-align: left;
+                border: 1px solid #333; margin: 15px 0; font-family: monospace;
             }
-            
-            .input-group { display: flex; gap: 5px; margin-top: 10px; }
-            input { flex: 1; background: #1a1a1a; border: 1px solid #333; color: white; padding: 10px; border-radius: 8px; }
-            .btn { background: var(--primary); color: #000; border: none; padding: 10px 15px; border-radius: 8px; font-weight: bold; }
-            
-            .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-            .stat { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; text-align: center; }
-            .btn-red { background: #ff4d4d; color: white; width: 100%; margin-top: 5px; }
+            .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+            .stat-item { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 10px; }
+            .btn { 
+                width: 100%; padding: 15px; margin: 5px 0; border: none; border-radius: 12px; 
+                font-weight: bold; font-size: 14px; cursor: pointer; transition: 0.2s;
+            }
+            .btn-main { background: var(--primary); color: black; }
+            .btn-danger { background: #ff4d4d; color: white; }
+            .btn:disabled { opacity: 0.3; }
+            input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #333; background: #1a1a1a; color: white; box-sizing: border-box; }
         </style>
     </head>
     <body>
         <div class="card">
-            <div id="m-status" class="badge offline">OFFLINE</div>
-            <div class="grid">
-                <div class="stat"><small>CPU</small><br><b id="s-cpu">0%</b></div>
-                <div class="stat"><small>RAM</small><br><b id="s-ram">0%</b></div>
-            </div>
-
-            <div id="console">Загрузка консоли...</div>
+            <div id="status" style="color: #ff4d4d; font-weight: bold; margin-bottom: 10px;">● PC OFFLINE</div>
             
-            <div class="input-group">
-                <input type="text" id="cmd-input" placeholder="Введите команду...">
-                <button class="btn" onclick="sendTerminal()">SEND</button>
+            <div class="stat-grid">
+                <div class="stat-item"><small>CPU</small><br><b id="cpu">0%</b></div>
+                <div class="stat-item"><small>RAM</small><br><b id="ram">0%</b></div>
             </div>
 
-            <div style="margin-top: 15px;">
-                <button class="btn" style="width:100%; margin-bottom:5px;" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ СЕРВЕР</button>
-                <button class="btn btn-red" onclick="sendCmd('STOP')">🛑 ВЫКЛЮЧИТЬ</button>
-                <button class="btn" style="width:100%; background:#444; color:white; margin-top:5px;" onclick="sendCmd('SCREENSHOT')">📸 СКРИНШОТ</button>
-            </div>
+            <div id="console">Консоль ожидает подключения...</div>
+            
+            <input type="text" id="cmd-in" placeholder="Введите команду в консоль...">
+            <button class="btn btn-main" style="margin-top:10px;" onclick="sendTerm()">ОТПРАВИТЬ КОМАНДУ</button>
+            
+            <hr style="opacity: 0.1; margin: 20px 0;">
+            
+            <button id="b-start" class="btn btn-main" onclick="sendCmd('START')">🚀 ЗАПУСТИТЬ СЕРВЕР</button>
+            <button id="b-stop" class="btn btn-danger" onclick="sendCmd('STOP')">🛑 ОСТАНОВИТЬ</button>
+            <button id="b-screen" class="btn" style="background:#333; color:white;" onclick="sendCmd('SCREENSHOT')">📸 СКРИНШОТ</button>
         </div>
 
         <script>
             let tg = window.Telegram.WebApp;
+            tg.expand();
             const uid = tg.initDataUnsafe.user.id;
 
             async function refresh() {
                 try {
                     let r = await fetch('/get_pc_stats/' + uid);
                     let d = await r.json();
-                    document.getElementById('m-status').className = "badge " + (d.online ? "online" : "offline");
-                    document.getElementById('m-status').innerText = d.online ? "ONLINE" : "OFFLINE";
-                    document.getElementById('s-cpu').innerText = d.cpu + "%";
-                    document.getElementById('s-ram').innerText = d.ram + "%";
-                    document.getElementById('console').innerText = d.logs.join('\\n');
-                    let c = document.getElementById('console');
-                    c.scrollTop = c.scrollHeight;
+                    
+                    document.getElementById('status').innerText = d.online ? "● PC ONLINE" : "● PC OFFLINE";
+                    document.getElementById('status').style.color = d.online ? "#28a745" : "#ff4d4d";
+                    document.getElementById('cpu').innerText = d.cpu + "%";
+                    document.getElementById('ram').innerText = d.ram + "%";
+                    
+                    if(d.logs.length > 0) {
+                        document.getElementById('console').innerText = d.logs.join('\\n');
+                        let c = document.getElementById('console');
+                        c.scrollTop = c.scrollHeight;
+                    }
+
+                    const btns = [document.getElementById('b-start'), document.getElementById('b-stop'), document.getElementById('b-screen')];
+                    btns.forEach(b => b.disabled = !d.online);
                 } catch(e) {}
             }
 
-            function sendCmd(name) { fetch(`/send_from_web?user_id=${uid}&cmd=${name}`); }
-            
-            function sendTerminal() {
-                let i = document.getElementById('cmd-input');
+            function sendCmd(c) { fetch(`/send_from_web?user_id=${uid}&cmd=${c}`); tg.HapticFeedback.impactOccurred('medium'); }
+            function sendTerm() {
+                let i = document.getElementById('cmd-in');
                 fetch(`/send_from_web?user_id=${uid}&cmd=TERMINAL:${i.value}`);
                 i.value = '';
             }
@@ -107,18 +127,18 @@ async def get_stats(user_id: str):
         "online": is_online,
         "cpu": stats.get("cpu", 0),
         "ram": stats.get("ram", 0),
-        "logs": console_logs.get(user_id, ["Консоль пуста"])
+        "logs": console_logs.get(user_id, ["Ожидание данных..."])
     }
 
 @app.post("/report_status/{user_id}")
 async def report_status(user_id: str, data: dict):
     pc_stats[user_id] = {
-        "cpu": data.get("cpu", 0), "ram": data.get("ram", 0),
+        "cpu": data.get("cpu", 0),
+        "ram": data.get("ram", 0),
         "last_seen": time.time()
     }
-    # Обновляем логи консоли (берем последние 20 строк)
     if "logs" in data:
-        console_logs[user_id] = data["logs"][-20:]
+        console_logs[user_id] = data["logs"]
     return {"ok": True}
 
 @app.get("/send_from_web")
@@ -128,15 +148,10 @@ async def send_from_web(user_id: str, cmd: str):
 
 @app.get("/get_cmd/{user_id}")
 async def get_cmd(user_id: str):
+    if user_id in pc_stats: pc_stats[user_id]["last_seen"] = time.time()
     cmd = commands_storage.get(user_id, "IDLE")
     commands_storage[user_id] = "IDLE"
     return {"cmd": cmd}
-
-# Бот и загрузка файлов
-@app.post("/upload_plugin/{user_id}")
-async def upload_plugin(user_id: str, file: UploadFile = File(...)):
-    # Логика сохранения плагина в папку plugins на ПК (будет в клиенте)
-    return {"status": "plugin_received"}
 
 @app.post("/upload_screen/{user_id}")
 async def upload_screen(user_id: str, file: UploadFile = File(...)):
@@ -147,16 +162,9 @@ async def upload_screen(user_id: str, file: UploadFile = File(...)):
 @dp.message(F.text == "/start")
 async def start(m: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎮 КОНСОЛЬ И УПРАВЛЕНИЕ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))
+        InlineKeyboardButton(text="🎮 ОТКРЫТЬ КОНСОЛЬ", web_app=WebAppInfo(url="https://controlminecraft.onrender.com"))
     ]])
-    await m.answer("Панель управления сервером готова:", reply_markup=kb)
-
-async def run_bot():
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-@app.on_event("startup")
-async def on_up(): asyncio.create_task(run_bot())
+    await m.answer("Панель управления готова:", reply_markup=kb)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000)
